@@ -28,5 +28,16 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
+.idea/
 # .vscode/
+
+# Built k6 binary produced by xk6 build
+k6
+k6.exe
+
+# GoReleaser dist output
+dist/
+
+# macOS
+.DS_Store
+
