@@ -89,59 +89,68 @@ func (m *KafkaRestModule) newKafkaRestClient(call sobek.ConstructorCall) *sobek.
 	return rt.ToValue(client).ToObject(rt)
 }
 
-// Produce publishes a batch of messages to the given Kafka topic.
-// JS usage: client.produce("my-topic", [{value: {foo: "bar"}}])
+// Produce publishes messages to a Kafka topic, auto-chunking into batches
+// of maxBatchSize (default 500, ceiling 1000) to stay within REST Proxy limits.
 func (c *KafkaRestClient) Produce(topic string, messages []Message) (*ProduceResponse, error) {
-	limit := c.config.MaxBatchSize
-	if limit <= 0 {
-		limit = defaultMaxBatchSize
+	chunkSize := c.config.MaxBatchSize
+	if chunkSize <= 0 {
+		chunkSize = defaultMaxBatchSize
 	}
 	const hardCeiling = 1000
-	if limit > hardCeiling {
-		limit = hardCeiling
+	if chunkSize > hardCeiling {
+		chunkSize = hardCeiling
 	}
 
-	if len(messages) > limit {
-		return nil, fmt.Errorf(
-			"kafka-rest produce: batch size %d exceeds limit %d — split into smaller batches or raise maxBatchSize (max %d)",
-			len(messages), limit, hardCeiling,
-		)
-	}
+	var allOffsets []OffsetMetadata
 
-	ctx := context.Background()
-	start := time.Now()
+	for i := 0; i < len(messages); i += chunkSize {
+		end := i + chunkSize
+		if end > len(messages) {
+			end = len(messages)
+		}
+		chunk := messages[i:end]
 
-	result, produceErr := c.doProduce(ctx, topic, messages)
+		ctx := context.Background()
+		start := time.Now()
 
-	// The REST Proxy returns 200 OK even when individual records fail —
-	// each offset entry carries its own error_code.
-	successCount, failedCount := 0, 0
-	var recordErrors []string
-	if result != nil {
-		for i, off := range result.Offsets {
-			if off.ErrorCode != nil && *off.ErrorCode != 0 {
-				failedCount++
-				recordErrors = append(recordErrors,
-					fmt.Sprintf("record[%d] error_code=%d: %s", i, *off.ErrorCode, off.Error))
-			} else {
-				successCount++
+		result, produceErr := c.doProduce(ctx, topic, chunk)
+
+		// The REST Proxy returns 200 OK even when individual records fail —
+		// each offset entry carries its own error_code.
+		successCount, failedCount := 0, 0
+		var recordErrors []string
+		if result != nil {
+			for j, off := range result.Offsets {
+				if off.ErrorCode != nil && *off.ErrorCode != 0 {
+					failedCount++
+					recordErrors = append(recordErrors,
+						fmt.Sprintf("record[%d] error_code=%d: %s", i+j, *off.ErrorCode, off.Error))
+				} else {
+					successCount++
+				}
 			}
+			allOffsets = append(allOffsets, result.Offsets...)
+		} else if produceErr != nil {
+			failedCount = len(chunk)
 		}
-	} else if produceErr != nil {
-		failedCount = len(messages)
+
+		c.pushSamples(ctx, topic, successCount, failedCount, time.Since(start))
+
+		if produceErr != nil {
+			return &ProduceResponse{Offsets: allOffsets}, produceErr
+		}
+		if len(recordErrors) > 0 {
+			preview := recordErrors
+			if len(preview) > 3 {
+				preview = append(preview[:3], fmt.Sprintf("…and %d more", len(recordErrors)-3))
+			}
+			return &ProduceResponse{Offsets: allOffsets},
+				fmt.Errorf("kafka-rest produce: %d/%d records failed — %s",
+					failedCount, len(chunk), strings.Join(preview, "; "))
+		}
 	}
 
-	c.pushSamples(ctx, topic, successCount, failedCount, time.Since(start))
-
-	if len(recordErrors) > 0 {
-		preview := recordErrors
-		if len(preview) > 3 {
-			preview = append(preview[:3], fmt.Sprintf("…and %d more", len(recordErrors)-3))
-		}
-		return result, fmt.Errorf("kafka-rest produce: %d/%d records failed — %s",
-			failedCount, len(messages), strings.Join(preview, "; "))
-	}
-	return result, produceErr
+	return &ProduceResponse{Offsets: allOffsets}, nil
 }
 
 func (c *KafkaRestClient) doProduce(ctx context.Context, topic string, messages []Message) (*ProduceResponse, error) {

@@ -19,7 +19,7 @@ const client = new KafkaRestClient({
   scope:        'kafka',
 });
 
-const BATCH_SIZE = 500;
+const BATCH_SIZE = 2000;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

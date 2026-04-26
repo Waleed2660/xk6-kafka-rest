@@ -29,7 +29,7 @@ with full **OAuth 2.0 (Client Credentials)** support.
 
 - ✅ OAuth 2.0 Client Credentials grant — automatic token fetch & refresh
 - ✅ JSON batch produce (`POST /topics/{topic}`)
-- ✅ Configurable batch size limit (default 500, hard ceiling 1000)
+- ✅ Configurable batch size — auto-chunks large payloads (default 500 per HTTP call, ceiling 1000)
 - ✅ Per-record error detection — surfaces silent Kafka-level failures
 - ✅ Custom k6 metrics: `kafka_rest_messages_sent`, `kafka_rest_publish_duration`, `kafka_rest_publish_errors`
 - ✅ Per-topic metric tags
@@ -138,7 +138,7 @@ See the [`/examples`](examples/) folder for ready-to-run scripts:
 | `clientId` | `string` | **required** | OAuth client ID |
 | `clientSecret` | `string` | **required** | OAuth client secret |
 | `scope` | `string` | `""` | OAuth scope (space-separated) |
-| `maxBatchSize` | `number` | `500` | Max records per `produce()` call. Hard ceiling: `1000` |
+| `maxBatchSize` | `number` | `500` | Records per HTTP call. Larger arrays are auto-chunked. Ceiling: `1000`. Reduce this if payloads are large (e.g. `100` for ~10 KB messages) |
 
 ---
 

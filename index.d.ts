@@ -31,8 +31,9 @@ export interface ClientConfig {
   scope?: string;
 
   /**
-   * Maximum number of records per `produce()` call.
-   * Hard ceiling is 1000. Defaults to 500 when not set.
+   * Number of records per HTTP call to the REST Proxy.
+   * Arrays larger than this are automatically split and sent as sequential requests.
+   * Ceiling is 1000 (REST Proxy request size limit). Defaults to 500.
    * @default 500
    */
   maxBatchSize?: number;
