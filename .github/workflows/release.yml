@@ -3,40 +3,77 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*"   # triggers on v0.1.0, v1.2.3, etc.
+      - "v*.*.*"
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    name: Publish Release
+  # Run checks first — fail fast before producing any binaries
+  checks:
+    name: Vet & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          fetch-depth: 0
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  # Build one binary per platform, then upload all to a single GitHub Release
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: checks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: go vet
-        run: go vet ./...
-
-      - name: Run tests
-        run: go test -race -count=1 ./...
-
       - name: Install xk6
         run: go install go.k6.io/xk6/cmd/xk6@latest
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
+      - name: Build k6 binary
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          BIN="k6"
+          [ "${{ matrix.goos }}" = "windows" ] && BIN="k6.exe"
+          xk6 build \
+            --with github.com/Waleed2660/xk6-kafka-rest=. \
+            --output "${BIN}"
 
+      - name: Package archive
+        run: |
+          ARCHIVE="xk6-kafka-rest_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "${ARCHIVE}.zip" k6.exe README.md CHANGELOG.md LICENSE index.d.ts
+          else
+            tar czf "${ARCHIVE}.tar.gz" k6 README.md CHANGELOG.md LICENSE index.d.ts
+          fi
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "xk6-kafka-rest_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}.*"
+          generate_release_notes: false

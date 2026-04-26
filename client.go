@@ -39,7 +39,7 @@ type messageWire struct {
 
 // toWire converts a Message to its REST Proxy v2 JSON wire format.
 func toWire(m Message) messageWire {
-	return messageWire{Key: m.Key, Value: m.Value}
+	return messageWire(m)
 }
 
 // ProduceResponse is returned to the JS script after a successful publish.
