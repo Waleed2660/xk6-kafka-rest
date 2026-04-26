@@ -6,10 +6,12 @@ export const options = {
     publish: {
       executor: 'shared-iterations',
       vus: 10,
-      iterations: 250,   // 250 batches × 500 messages = 125,000 total
+      iterations: 1000,  // 1000 iterations × 50 messages = 50,000 total
     },
   },
 };
+
+const CLUSTER_ID = __ENV.CLUSTER_ID || 'local-dev-cluster-0001';
 
 const client = new KafkaRestClient({
   baseUrl:      'http://localhost:8082',
@@ -17,9 +19,12 @@ const client = new KafkaRestClient({
   clientId:     'test-client',
   clientSecret: 'test-secret',
   scope:        'kafka',
+  apiVersion:   'v3',
+  clusterId:    CLUSTER_ID,
+  maxBatchSize: 50,
 });
 
-const BATCH_SIZE = 2000;
+const BATCH_SIZE = 50;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -30,7 +35,6 @@ function randomHex(len) {
 }
 
 function randomKey() {
-  // UUID v4 shape: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
   return `${randomHex(8)}-${randomHex(4)}-4${randomHex(3)}-${randomHex(4)}-${randomHex(12)}`;
 }
 
@@ -79,9 +83,19 @@ function buildPayload() {
 export default function () {
   const messages = [];
   for (let i = 0; i < BATCH_SIZE; i++) {
-    messages.push({ key: randomKey(), value: buildPayload() });
+    messages.push({
+      key:   randomKey(),
+      value: buildPayload(),
+      headers: [
+        { key: 'x-trace-id',       value: randomKey() },
+        { key: 'x-source-service', value: 'xk6-kafka-rest-load-test' },
+        { key: 'schema-version',   value: '1' },
+      ],
+    });
   }
 
   const result = client.produce('my-topic', messages);
-  console.log(`batch offsets: ${result.offsets[0].offset} → ${result.offsets[result.offsets.length - 1].offset}`);
+  const sent = result.offsets.length;
+  const partitions = [...new Set(result.offsets.map(o => o.partition))].length;
+  console.log(`sent=${sent} across ${partitions} partition(s)`);
 }

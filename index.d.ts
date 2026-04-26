@@ -31,12 +31,36 @@ export interface ClientConfig {
   scope?: string;
 
   /**
-   * Number of records per HTTP call to the REST Proxy.
-   * Arrays larger than this are automatically split and sent as sequential requests.
-   * Ceiling is 1000 (REST Proxy request size limit). Defaults to 500.
-   * @default 500
+   * Number of records per HTTP call (v2) or max concurrent HTTP calls (v3).
+   * v2: arrays larger than this are auto-chunked. Ceiling 1000.
+   * v3: controls goroutine concurrency per produce() call. Ceiling 100.
+   * @default 500 (v2) / 20 (v3)
    */
   maxBatchSize?: number;
+
+  /**
+   * REST Proxy API version to use.
+   * - `"v2"` (default): batch produce, no headers, one HTTP call per chunk.
+   * - `"v3"`: one HTTP call per record (concurrent), supports message headers,
+   *   requires `clusterId`.
+   * @default "v2"
+   */
+  apiVersion?: 'v2' | 'v3';
+
+  /**
+   * Confluent cluster ID — required when `apiVersion` is `"v3"`.
+   * Find it at: GET {baseUrl}/v3/clusters
+   * @example "lkc-abc123"
+   */
+  clusterId?: string;
+}
+
+/**
+ * A single Kafka message header (v3 API only).
+ */
+export interface Header {
+  key: string;
+  value: string;
 }
 
 /**
@@ -51,6 +75,12 @@ export interface Message {
 
   /** Message payload — serialised as JSON by the REST Proxy. */
   value: Record<string, unknown> | unknown;
+
+  /**
+   * Per-record Kafka headers.
+   * Only sent when using `apiVersion: 'v3'` — silently ignored in v2 mode.
+   */
+  headers?: Header[];
 }
 
 /**
@@ -122,17 +152,21 @@ export declare class KafkaRestClient {
   constructor(config: ClientConfig);
 
   /**
-   * Publishes a batch of messages to a Kafka topic in a single HTTP request.
+   * Publishes messages to a Kafka topic.
+   *
+   * **v2 mode** (default): records are batched into chunks of `maxBatchSize`
+   * per HTTP call. No headers supported.
+   *
+   * **v3 mode**: each record is a separate HTTP call sent concurrently
+   * (up to `maxBatchSize` in flight at once). Supports message headers.
    *
    * Throws if:
-   * - `messages.length` exceeds `maxBatchSize` (default 500, hard ceiling 1000)
-   * - The OAuth token cannot be obtained after retries
+   * - OAuth token cannot be obtained after retries
    * - The REST Proxy returns a non-2xx HTTP status
-   * - One or more records contain a non-zero `error_code` in the response
+   * - One or more records contain a non-zero `error_code`
    *
-   * @param topic   - Kafka topic name
-   * @param messages - Batch of records to publish
-   * @returns ProduceResponse with per-record offset metadata
+   * @param topic    - Kafka topic name
+   * @param messages - Records to publish
    */
   produce(topic: string, messages: Message[]): ProduceResponse;
 
