@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// retryPolicy controls how token fetches are retried on transient failures.
+// retryPolicy controls token fetch retry behaviour.
 type retryPolicy struct {
 	maxAttempts int
-	baseDelay   time.Duration // delay before attempt 2; doubles each attempt
+	baseDelay   time.Duration // doubles each attempt
 	maxDelay    time.Duration
 }
 
@@ -23,14 +23,13 @@ var defaultRetryPolicy = retryPolicy{
 	maxDelay:    10 * time.Second,
 }
 
-// tokenResponse holds the parsed OAuth token endpoint response.
 type tokenResponse struct {
 	accessToken string
 	expiry      time.Time
 }
 
 // TokenManager fetches and caches an OAuth client-credentials token.
-// It is safe for concurrent use across goroutines (VUs).
+// Safe for concurrent use across VUs.
 type TokenManager struct {
 	mu           sync.Mutex
 	clientID     string
@@ -54,8 +53,7 @@ func NewTokenManager(cfg ClientConfig) *TokenManager {
 	}
 }
 
-// Token returns a valid Bearer token, refreshing it when fewer than
-// 30 seconds remain before expiry.
+// Token returns a valid Bearer token, refreshing when fewer than 30s remain.
 func (t *TokenManager) Token(ctx context.Context) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -67,9 +65,8 @@ func (t *TokenManager) Token(ctx context.Context) (string, error) {
 	return t.fetchWithRetry(ctx)
 }
 
-// fetchWithRetry calls fetchToken up to retry.maxAttempts times, backing off
-// exponentially between attempts. Only retries on network errors and HTTP 5xx;
-// 4xx responses (bad credentials etc.) are returned immediately.
+// fetchWithRetry retries on network errors and HTTP 5xx with exponential backoff.
+// 4xx responses are returned immediately — retrying bad credentials wastes time.
 func (t *TokenManager) fetchWithRetry(ctx context.Context) (string, error) {
 	delay := t.retry.baseDelay
 	var lastErr error
@@ -103,7 +100,7 @@ func (t *TokenManager) fetchWithRetry(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("oauth: all %d attempts failed, last error: %w", t.retry.maxAttempts, lastErr)
 }
 
-// isFatal returns true for errors that should not be retried (4xx status codes).
+// isFatal returns true for errors that should not be retried (4xx).
 func isFatal(err error) bool {
 	if err == nil {
 		return false

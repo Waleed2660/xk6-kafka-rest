@@ -66,8 +66,8 @@ type KafkaRestClient struct {
 	metrics      *kafkaMetrics
 }
 
-// newKafkaRestClient is the JS constructor: new KafkaRestClient(config)
-// Must use sobek.ConstructorCall so k6 allows calling it with `new`.
+// newKafkaRestClient is the JS constructor: new KafkaRestClient(config).
+// sobek.ConstructorCall is required for k6 to allow calling it with `new`.
 func (m *KafkaRestModule) newKafkaRestClient(call sobek.ConstructorCall) *sobek.Object {
 	rt := m.vu.Runtime()
 
@@ -92,7 +92,6 @@ func (m *KafkaRestModule) newKafkaRestClient(call sobek.ConstructorCall) *sobek.
 // Produce publishes a batch of messages to the given Kafka topic.
 // JS usage: client.produce("my-topic", [{value: {foo: "bar"}}])
 func (c *KafkaRestClient) Produce(topic string, messages []Message) (*ProduceResponse, error) {
-	// Resolve effective batch limit.
 	limit := c.config.MaxBatchSize
 	if limit <= 0 {
 		limit = defaultMaxBatchSize
@@ -114,9 +113,8 @@ func (c *KafkaRestClient) Produce(topic string, messages []Message) (*ProduceRes
 
 	result, produceErr := c.doProduce(ctx, topic, messages)
 
-	// Count per-record successes and failures reported by the REST Proxy.
-	// A 200 OK from the proxy does NOT mean all records landed — each
-	// offset entry can carry its own error_code.
+	// The REST Proxy returns 200 OK even when individual records fail —
+	// each offset entry carries its own error_code.
 	successCount, failedCount := 0, 0
 	var recordErrors []string
 	if result != nil {
@@ -130,15 +128,12 @@ func (c *KafkaRestClient) Produce(topic string, messages []Message) (*ProduceRes
 			}
 		}
 	} else if produceErr != nil {
-		// Entire batch failed at the HTTP level.
 		failedCount = len(messages)
 	}
 
 	c.pushSamples(ctx, topic, successCount, failedCount, time.Since(start))
 
 	if len(recordErrors) > 0 {
-		// Surface up to 3 per-record errors in the returned error so the
-		// script author can see what went wrong without flooding the log.
 		preview := recordErrors
 		if len(preview) > 3 {
 			preview = append(preview[:3], fmt.Sprintf("…and %d more", len(recordErrors)-3))
@@ -149,28 +144,21 @@ func (c *KafkaRestClient) Produce(topic string, messages []Message) (*ProduceRes
 	return result, produceErr
 }
 
-// doProduce contains the actual HTTP logic, called by Produce.
 func (c *KafkaRestClient) doProduce(ctx context.Context, topic string, messages []Message) (*ProduceResponse, error) {
-	// 1. Get a valid OAuth token.
 	token, err := c.tokenManager.Token(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("kafka-rest produce: %w", err)
 	}
 
-	// 2. Build the REST Proxy request body.
 	wire := make([]messageWire, len(messages))
 	for i, m := range messages {
 		wire[i] = toWire(m)
 	}
-	body := map[string]interface{}{
-		"records": wire,
-	}
-	bodyBytes, err := json.Marshal(body)
+	bodyBytes, err := json.Marshal(map[string]interface{}{"records": wire})
 	if err != nil {
 		return nil, fmt.Errorf("kafka-rest produce: marshal: %w", err)
 	}
 
-	// 3. POST to /topics/{topic}
 	endpoint := fmt.Sprintf("%s/topics/%s", c.config.BaseURL, topic)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -180,7 +168,6 @@ func (c *KafkaRestClient) doProduce(ctx context.Context, topic string, messages 
 	req.Header.Set("Accept", "application/vnd.kafka.v2+json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	// 4. Execute request.
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("kafka-rest produce: http: %w", err)
@@ -188,7 +175,6 @@ func (c *KafkaRestClient) doProduce(ctx context.Context, topic string, messages 
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Read the body so we can surface the actual error message from the proxy.
 		var errBody struct {
 			ErrorCode int    `json:"error_code"`
 			Message   string `json:"message"`
@@ -201,7 +187,6 @@ func (c *KafkaRestClient) doProduce(ctx context.Context, topic string, messages 
 		return nil, fmt.Errorf("kafka-rest produce: REST proxy returned %s", resp.Status)
 	}
 
-	// 5. Decode and return the response.
 	var result ProduceResponse
 	if err := jsonDecode(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("kafka-rest produce: decode response: %w", err)
@@ -209,5 +194,5 @@ func (c *KafkaRestClient) doProduce(ctx context.Context, topic string, messages 
 	return &result, nil
 }
 
-// Close is a no-op for now but satisfies the expected JS API surface.
+// Close is a no-op reserved for future connection cleanup.
 func (c *KafkaRestClient) Close() {}
