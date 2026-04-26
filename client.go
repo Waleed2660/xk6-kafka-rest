@@ -97,8 +97,16 @@ func (m *KafkaRestModule) newKafkaRestClient(call sobek.ConstructorCall) *sobek.
 		vu:           m.vu,
 		config:       config,
 		tokenManager: NewTokenManager(config),
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
-		metrics:      m.metrics,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        200,
+				MaxIdleConnsPerHost: 200,
+				IdleConnTimeout:     90 * time.Second,
+				DisableKeepAlives:   false,
+			},
+		},
+		metrics: m.metrics,
 	}
 
 	return rt.ToValue(client).ToObject(rt)
@@ -120,9 +128,6 @@ func (c *KafkaRestClient) Produce(topic string, messages []Message) (*ProduceRes
 			} else {
 				successCount++
 			}
-		}
-		if err != nil {
-			failedCount += len(messages) - len(offsets)
 		}
 		c.pushSamples(ctx, topic, successCount, failedCount, time.Since(start))
 		return &ProduceResponse{Offsets: offsets}, err

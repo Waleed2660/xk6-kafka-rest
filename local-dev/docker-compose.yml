@@ -31,6 +31,7 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CLUSTER_ID: "local-dev-cluster-0001"
 
   # ────────────────────────────────────────────
   # 3. Mock OAuth2 Server (acts as the IDP)

@@ -6,8 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 )
 
 const defaultV3Concurrency = 20
@@ -31,10 +34,12 @@ type v3Header struct {
 }
 
 type v3ProduceResponse struct {
-	PartitionID int    `json:"partition_id"`
-	Offset      int64  `json:"offset"`
-	ErrorCode   *int   `json:"error_code,omitempty"`
-	Message     string `json:"message,omitempty"`
+	PartitionID int   `json:"partition_id"`
+	Offset      int64 `json:"offset"`
+	// error_code is overloaded: on success the REST Proxy echoes the HTTP
+	// status (200); on failure it contains a Kafka error code (4xx/5xx).
+	ErrorCode int    `json:"error_code"`
+	Message   string `json:"message,omitempty"`
 }
 
 // produceV3 sends all messages concurrently (bounded by maxBatchSize) to the v3 API.
@@ -69,17 +74,54 @@ func (c *KafkaRestClient) produceV3(ctx context.Context, topic string, messages 
 	}
 	wg.Wait()
 
-	offsets := make([]OffsetMetadata, 0, len(messages))
-	for _, r := range results {
-		if r.err != nil {
-			return offsets, r.err
+	offsets := make([]OffsetMetadata, len(messages))
+	var firstErr error
+	for i, r := range results {
+		offsets[i] = r.offset
+		if r.err != nil && firstErr == nil {
+			firstErr = r.err
 		}
-		offsets = append(offsets, r.offset)
 	}
-	return offsets, nil
+	return offsets, firstErr
 }
 
 func (c *KafkaRestClient) doProduceV3Record(ctx context.Context, topic string, msg Message) (OffsetMetadata, error) {
+	const maxRetries = 3
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		off, err := c.doProduceV3RecordOnce(ctx, topic, msg)
+		if err == nil {
+			return off, nil
+		}
+		// Only retry on EOF / connection-reset — these are transient keep-alive drops.
+		if !isRetryableV3Error(err) || ctx.Err() != nil {
+			return OffsetMetadata{}, err
+		}
+		lastErr = err
+		// Brief back-off before retry: 0ms, 50ms, 100ms
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return OffsetMetadata{}, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 50 * time.Millisecond):
+			}
+		}
+	}
+	return OffsetMetadata{}, fmt.Errorf("kafka-rest v3: %w (after %d retries)", lastErr, maxRetries)
+}
+
+func isRetryableV3Error(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return err == io.EOF ||
+		strings.Contains(s, "EOF") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "broken pipe")
+}
+
+func (c *KafkaRestClient) doProduceV3RecordOnce(ctx context.Context, topic string, msg Message) (OffsetMetadata, error) {
 	token, err := c.tokenManager.Token(ctx)
 	if err != nil {
 		return OffsetMetadata{}, fmt.Errorf("kafka-rest v3: %w", err)
@@ -135,9 +177,16 @@ func (c *KafkaRestClient) doProduceV3Record(ctx context.Context, topic string, m
 		return OffsetMetadata{}, fmt.Errorf("kafka-rest v3: REST proxy returned %s", resp.Status)
 	}
 
+	// error_code on a 2xx response echoes the HTTP status (200) — not a Kafka error.
+	// Only surface it as an error when the REST Proxy itself signals a record-level failure.
+	var errCode *int
+	if v3Resp.ErrorCode >= 400 {
+		errCode = &v3Resp.ErrorCode
+	}
+
 	return OffsetMetadata{
 		Partition: v3Resp.PartitionID,
 		Offset:    v3Resp.Offset,
-		ErrorCode: v3Resp.ErrorCode,
+		ErrorCode: errCode,
 	}, nil
 }
