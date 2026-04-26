@@ -23,23 +23,34 @@ type ClientConfig struct {
 	TokenURL     string `js:"tokenUrl"`
 	Scope        string `js:"scope"`
 	MaxBatchSize int    `js:"maxBatchSize"`
+	// v3-only fields
+	APIVersion string `js:"apiVersion"` // "v2" (default) or "v3"
+	ClusterID  string `js:"clusterId"`  // required for v3
 }
 
-// Message represents a single Kafka record sent to the REST Proxy.
+// Header is a Kafka message header (key/value string pair).
+// Only used by the v3 API — silently ignored in v2 mode.
+type Header struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// Message represents a single Kafka record.
 type Message struct {
-	Key   interface{} `json:"key,omitempty"`
-	Value interface{} `json:"value"`
+	Key     interface{} `json:"key,omitempty"`
+	Value   interface{} `json:"value"`
+	Headers []Header    `json:"headers,omitempty"`
 }
 
-// messageWire is the on-the-wire representation sent to the REST Proxy v2 JSON API.
+// messageWire is the on-the-wire representation for the v2 JSON API.
+// Headers are omitted — the v2 JSON API does not support per-record headers.
 type messageWire struct {
 	Key   interface{} `json:"key,omitempty"`
 	Value interface{} `json:"value"`
 }
 
-// toWire converts a Message to its REST Proxy v2 JSON wire format.
 func toWire(m Message) messageWire {
-	return messageWire(m)
+	return messageWire{Key: m.Key, Value: m.Value}
 }
 
 // ProduceResponse is returned to the JS script after a successful publish.
@@ -78,7 +89,7 @@ func (m *KafkaRestModule) newKafkaRestClient(call sobek.ConstructorCall) *sobek.
 		}
 	}
 
-	if err := validateConfig(config); err != nil {
+	if err := validateConfig(&config); err != nil {
 		panic(rt.NewTypeError(err.Error()))
 	}
 
@@ -93,9 +104,31 @@ func (m *KafkaRestModule) newKafkaRestClient(call sobek.ConstructorCall) *sobek.
 	return rt.ToValue(client).ToObject(rt)
 }
 
-// Produce publishes messages to a Kafka topic, auto-chunking into batches
-// of maxBatchSize (default 500, ceiling 1000) to stay within REST Proxy limits.
+// Produce publishes messages to a Kafka topic.
+// v2 (default): auto-chunks into batches of maxBatchSize per HTTP call.
+// v3: sends each message as a separate HTTP call, up to maxBatchSize concurrent.
 func (c *KafkaRestClient) Produce(topic string, messages []Message) (*ProduceResponse, error) {
+	ctx := context.Background()
+	start := time.Now()
+
+	if c.config.APIVersion == "v3" {
+		offsets, err := c.produceV3(ctx, topic, messages)
+		successCount, failedCount := 0, 0
+		for _, off := range offsets {
+			if off.ErrorCode != nil && *off.ErrorCode != 0 {
+				failedCount++
+			} else {
+				successCount++
+			}
+		}
+		if err != nil {
+			failedCount += len(messages) - len(offsets)
+		}
+		c.pushSamples(ctx, topic, successCount, failedCount, time.Since(start))
+		return &ProduceResponse{Offsets: offsets}, err
+	}
+
+	// v2: chunk and send sequentially
 	chunkSize := c.config.MaxBatchSize
 	if chunkSize <= 0 {
 		chunkSize = defaultMaxBatchSize
@@ -114,9 +147,7 @@ func (c *KafkaRestClient) Produce(topic string, messages []Message) (*ProduceRes
 		}
 		chunk := messages[i:end]
 
-		ctx := context.Background()
-		start := time.Now()
-
+		chunkStart := time.Now()
 		result, produceErr := c.doProduce(ctx, topic, chunk)
 
 		// The REST Proxy returns 200 OK even when individual records fail —
@@ -138,7 +169,7 @@ func (c *KafkaRestClient) Produce(topic string, messages []Message) (*ProduceRes
 			failedCount = len(chunk)
 		}
 
-		c.pushSamples(ctx, topic, successCount, failedCount, time.Since(start))
+		c.pushSamples(ctx, topic, successCount, failedCount, time.Since(chunkStart))
 
 		if produceErr != nil {
 			return &ProduceResponse{Offsets: allOffsets}, produceErr

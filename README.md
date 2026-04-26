@@ -126,6 +126,7 @@ See the [`/examples`](examples/) folder for ready-to-run scripts:
 | [`single-message.js`](examples/single-message.js) | One message per iteration with `check()` assertions |
 | [`batch-produce.js`](examples/batch-produce.js) | 50 K messages in 500-record batches across 10 VUs |
 | [`multi-topic.js`](examples/multi-topic.js) | Multiple topics with independent per-topic thresholds |
+| [`v3-with-headers.js`](examples/v3-with-headers.js) | v3 API — per-record headers, multi-cluster |
 
 ---
 
@@ -140,7 +141,9 @@ See the [`/examples`](examples/) folder for ready-to-run scripts:
 | `clientId` | `string` | **required** | OAuth client ID |
 | `clientSecret` | `string` | **required** | OAuth client secret |
 | `scope` | `string` | `""` | OAuth scope (space-separated) |
-| `maxBatchSize` | `number` | `500` | Records per HTTP call. Larger arrays are auto-chunked. Ceiling: `1000`. Reduce this if payloads are large (e.g. `100` for ~10 KB messages) |
+| `maxBatchSize` | `number` | `500` / `20` | v2: records per HTTP call, auto-chunked. v3: concurrent HTTP calls. |
+| `apiVersion` | `"v2"` \| `"v3"` | `"v2"` | REST Proxy API version. v3 supports headers and multi-cluster |
+| `clusterId` | `string` | — | Confluent cluster ID — **required for v3**. Find via `GET {baseUrl}/v3/clusters` |
 
 ---
 
@@ -159,8 +162,9 @@ Publishes a batch of messages to a Kafka topic in a single HTTP request.
 
 ```typescript
 {
-  key?:  string | object   // optional partition key
-  value: object            // message payload (serialised as JSON)
+  key?:     string | object   // optional partition key
+  value:    object            // message payload (serialised as JSON)
+  headers?: { key: string, value: string }[]  // v3 only
 }
 ```
 
