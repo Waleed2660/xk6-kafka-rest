@@ -64,6 +64,8 @@ xk6 build --with github.com/Waleed2660/xk6-kafka-rest@latest
 ./k6 version
 ```
 
+> **Note:** The module path is case-sensitive — use `Waleed2660` with a capital `W`.
+
 ---
 
 ## Quick Start
