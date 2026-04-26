@@ -78,6 +78,10 @@ func (m *KafkaRestModule) newKafkaRestClient(call sobek.ConstructorCall) *sobek.
 		}
 	}
 
+	if err := validateConfig(config); err != nil {
+		panic(rt.NewTypeError(err.Error()))
+	}
+
 	client := &KafkaRestClient{
 		vu:           m.vu,
 		config:       config,
