@@ -1,13 +1,12 @@
 // script.js
 import { KafkaRestClient } from 'k6/x/kafka-rest';
 
-// 50,000 messages ÷ 200 per batch = 250 iterations
 export const options = {
   scenarios: {
     publish: {
       executor: 'shared-iterations',
       vus: 10,
-      iterations: 250,   // 250 batches × 200 messages = 50,000 total
+      iterations: 250,   // 250 batches × 500 messages = 125,000 total
     },
   },
 };

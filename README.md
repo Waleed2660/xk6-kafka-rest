@@ -122,7 +122,7 @@ See the [`/examples`](examples/) folder for ready-to-run scripts:
 | Script | What it shows |
 |--------|--------------|
 | [`single-message.js`](examples/single-message.js) | One message per iteration with `check()` assertions |
-| [`batch-produce.js`](examples/batch-produce.js) | 50 K messages in 200-record batches across 10 VUs |
+| [`batch-produce.js`](examples/batch-produce.js) | 50 K messages in 500-record batches across 10 VUs |
 | [`multi-topic.js`](examples/multi-topic.js) | Multiple topics with independent per-topic thresholds |
 
 ---
